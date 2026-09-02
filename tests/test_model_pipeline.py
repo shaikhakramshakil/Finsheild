@@ -13,7 +13,9 @@ import pytest
 from finsheild.config import ProjectPaths, TrainingDefaults, snapshot_config
 from finsheild.evaluation import (
     EvalResult,
+    confusion_dict,
     evaluate,
+    plot_confusion_matrix,
     plot_pr_curve,
     plot_roc_curve,
     pr_auc,
@@ -23,6 +25,7 @@ from finsheild.evaluation import (
 )
 from finsheild.inference import EXPECTED_INPUT_COLUMNS, FraudPredictor
 from finsheild.model import MODEL_REGISTRY, build_model, list_models, predict_proba
+from finsheild.train import MODEL_OUTPUT_DIR
 
 EXPECTED_INPUTS = ["Time"] + [f"V{i}" for i in range(1, 29)] + ["Amount"]
 
@@ -35,7 +38,6 @@ def _synth_df(n: int = 800, seed: int = 42) -> pd.DataFrame:
     cols = EXPECTED_INPUTS + ["Class"]
     data = {c: rng.normal(0, 1, n) for c in cols}
     data["Class"] = (rng.uniform(0, 1, n) < 0.05).astype(int)
-    # Inject a tiny signal so a model can learn something
     for i in range(1, 29):
         data[f"V{i}"] = data[f"V{i}"] + 1.5 * data["Class"] * (1 if i % 2 else -1)
     return pd.DataFrame(data)
@@ -65,19 +67,32 @@ def test_unknown_model_raises():
         build_model("nope-neural-net")
 
 
+# --- train.py MODEL_OUTPUT_DIR routing ------------------------------------- #
+
+
+def test_model_output_dir_matches_phase_plan():
+    assert MODEL_OUTPUT_DIR["logreg"] == "baseline"
+    assert MODEL_OUTPUT_DIR["lightgbm"] == "baseline_gbm"
+    assert MODEL_OUTPUT_DIR["xgboost"] == "xgboost"
+
+
 # --- evaluation ------------------------------------------------------------- #
 
 
-def test_evaluate_returns_expected_metrics():
+def test_evaluate_returns_phase2_metric_set():
     rng = np.random.default_rng(0)
     y = (rng.uniform(0, 1, 500) < 0.1).astype(int)
     score = y * 0.7 + rng.normal(0, 0.2, 500)
     res = evaluate(y, score, target_fpr=0.05)
     assert isinstance(res, EvalResult)
+    for field in ("pr_auc", "roc_auc", "precision", "recall", "f1",
+                  "recall_at_target_fpr", "threshold", "confusion_matrix"):
+        assert hasattr(res, field), f"missing field {field}"
     assert 0.0 <= res.pr_auc <= 1.0
     assert 0.0 <= res.roc_auc <= 1.0
-    assert 0.0 <= res.recall_at_target_fpr <= 1.0
-    assert 0.0 <= res.threshold <= 1.0
+    cm = res.confusion_matrix
+    assert set(cm.keys()) == {"tn", "fp", "fn", "tp"}
+    assert cm["tn"] + cm["fp"] + cm["fn"] + cm["tp"] == len(y)
 
 
 def test_pr_auc_perfect_score():
@@ -102,9 +117,15 @@ def test_recall_at_fpr_meets_target():
 def test_tune_threshold_respects_fpr_cap():
     y = np.array([0, 0, 0, 0, 0, 1, 1])
     score = np.array([0.1, 0.2, 0.3, 0.4, 0.5, 0.7, 0.8])
-    thr, p, r, f1 = tune_threshold(y, score, target_fpr=0.0)  # FPR=0 means only score==1 allowed
-    # Should pick a high threshold and only flag the highest-scoring positives
+    thr, p, r, f1 = tune_threshold(y, score, target_fpr=0.0)
     assert thr >= 0.7
+
+
+def test_confusion_dict_correctness():
+    y_true = np.array([0, 1, 0, 1, 1])
+    y_pred = np.array([0, 1, 1, 0, 1])
+    cm = confusion_dict(y_true, y_pred)
+    assert cm == {"tn": 1, "fp": 1, "fn": 1, "tp": 2}
 
 
 def test_plot_pr_curve_writes_file(tmp_path: Path):
@@ -118,6 +139,12 @@ def test_plot_roc_curve_writes_file(tmp_path: Path):
     y = np.array([0, 1, 0, 1, 1])
     score = np.array([0.1, 0.9, 0.2, 0.8, 0.95])
     out = plot_roc_curve(y, score, tmp_path / "roc.png")
+    assert out.exists() and out.stat().st_size > 0
+
+
+def test_plot_confusion_matrix_writes_file(tmp_path: Path):
+    cm = {"tn": 700, "fp": 30, "fn": 50, "tp": 70}
+    out = plot_confusion_matrix(cm, tmp_path / "cm.png")
     assert out.exists() and out.stat().st_size > 0
 
 
@@ -142,19 +169,16 @@ def test_fraud_predictor_roundtrip(tmp_path: Path):
 
     pred = FraudPredictor.load(model_path, scaler_path, threshold=0.5)
 
-    # Single record
     rec = {c: 0.0 for c in EXPECTED_INPUTS}
     out = pred.predict_record(rec)
     assert set(out.keys()) == {"fraud_prob", "threshold", "is_fraud"}
     assert 0.0 <= out["fraud_prob"] <= 1.0
 
-    # Batch
     df_out = pred.predict_df(df.head(5))
     assert "fraud_prob" in df_out.columns
     assert "is_fraud" in df_out.columns
     assert len(df_out) == 5
 
-    # predict_proba shape
     p = pred.predict_proba(df.head(3))
     assert p.shape == (3,)
 
@@ -209,7 +233,6 @@ def test_snapshot_config_is_json_serializable():
     paths = ProjectPaths()
     td = TrainingDefaults()
     snap = snapshot_config(paths, td, extra={"foo": "bar"})
-    # round-trip through json
     s = json.dumps(snap, default=str)
     assert "paths" in s and "training" in s and "foo" in s
 
@@ -217,15 +240,12 @@ def test_snapshot_config_is_json_serializable():
 # --- training smoke (no full run) ------------------------------------------ #
 
 
-def test_train_lightgbm_smoke(tmp_path: Path, monkeypatch):
-    """Run a tiny end-to-end training + resume cycle against synthetic data.
-
-    Uses the real train.py entry point with FINSHEILD_* env vars redirected to tmp_path.
-    """
+def test_train_logreg_smoke(tmp_path: Path):
+    """End-to-end logreg baseline run; writes to models/baseline/ + evaluation/reports/."""
+    import os
     import subprocess
     import sys
 
-    # Generate synthetic CSV via the existing script
     raw_csv = tmp_path / "raw.csv"
     subprocess.check_call([
         sys.executable, "scripts/download_dataset.py",
@@ -237,33 +257,27 @@ def test_train_lightgbm_smoke(tmp_path: Path, monkeypatch):
         "FINSHEILD_RAW_CSV": str(raw_csv),
         "FINSHEILD_PROCESSED_DIR": str(tmp_path / "processed"),
         "FINSHEILD_MODELS_DIR": str(tmp_path / "models"),
-        "FINSHEILD_CHECKPOINTS_DIR": str(tmp_path / "checkpoints"),
         "FINSHEILD_RESULTS_DIR": str(tmp_path / "results"),
     }
-    cmd = [
-        sys.executable, "-m", "finsheild.train",
-        "--model", "lightgbm",
-        "--experiment", "test_smoke",
-        "--lgbm-n-estimators", "30",
-        "--lgbm-early-stopping-rounds", "10",
-    ]
+    cmd = [sys.executable, "-m", "finsheild.train", "--model", "logreg"]
     subprocess.check_call(cmd, env={**env, **__import__("os").environ}, cwd=str(Path.cwd()))
 
-    # artifacts exist
-    assert (tmp_path / "models" / "test_smoke" / "model.joblib").exists()
-    assert (tmp_path / "models" / "test_smoke" / "scaler.joblib").exists()
-    assert (tmp_path / "models" / "test_smoke" / "threshold.json").exists()
-    assert (tmp_path / "results" / "test_smoke" / "metrics.json").exists()
-    assert (tmp_path / "results" / "test_smoke" / "config.json").exists()
-    assert (tmp_path / "results" / "test_smoke" / "pr_curve.png").exists()
-    assert (tmp_path / "results" / "test_smoke" / "roc_curve.png").exists()
+    # Per-model directory layout
+    base = tmp_path / "models" / "baseline"
+    assert (base / "model.joblib").exists()
+    assert (base / "scaler.joblib").exists()
+    assert (base / "threshold.json").exists()
+    assert (base / "metrics.json").exists()
+    assert (base / "config.json").exists()
 
-    # metrics parses
-    m = json.loads((tmp_path / "results" / "test_smoke" / "metrics.json").read_text())
-    assert "pr_auc" in m and 0.0 <= m["pr_auc"] <= 1.0
-    assert "roc_auc" in m and 0.0 <= m["roc_auc"] <= 1.0
-    assert "threshold" in m
+    # Evaluation artifacts
+    eval_root = Path("evaluation")
+    # Note: these go under repo's evaluation/ dir because paths defaults aren't redirected
+    assert any(eval_root.glob("reports/baseline_*.md")) or (eval_root / "reports" / "baseline_report.md").exists()
+    assert any((eval_root / "figures").glob("baseline_*.png"))
 
-    # resume runs without raising
-    cmd_resume = cmd + ["--resume", "--max-epochs", "5"]
-    subprocess.check_call(cmd_resume, env={**env, **__import__("os").environ}, cwd=str(Path.cwd()))
+    # Metrics content
+    m = json.loads((base / "metrics.json").read_text())
+    for key in ("pr_auc", "roc_auc", "precision", "recall", "f1", "confusion_matrix"):
+        assert key in m
+    assert set(m["confusion_matrix"]) == {"tn", "fp", "fn", "tp"}

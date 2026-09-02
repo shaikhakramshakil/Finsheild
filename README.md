@@ -1,6 +1,6 @@
 # Finsheild
 
-ML-first digital-payment fraud intelligence platform. **Phase 1** (dataset pipeline) and **Phase 2** (model training + inference) are both implemented. The user-facing application is built later.
+ML-first digital-payment fraud intelligence platform. The current scope is **Phase 1 (dataset pipeline) and Phase 2 (LogReg baseline)** of the project's 16-phase ML plan. The user-facing application is built later.
 
 ## Project Overview
 
@@ -12,51 +12,52 @@ data/raw/creditcard.csv
 train / val / test (stratified 70/15/15, seed 42)
       ↓  FraudPreprocessor (scaler fit ONLY on train)
 scaled features
-      ↓  train.py → logreg | lightgbm
-checkpoints/<exp>/ + models/<exp>/ + results/<exp>/
+      ↓  train.py → logreg
+models/baseline/ + evaluation/{reports,figures}/
       ↓  inference.FraudPredictor
 fraud_prob / is_fraud
 ```
 
 The data task is binary fraud detection on the Kaggle Credit Card Fraud (ULB) dataset — see `docs/dataset.md` for source rationale, candidates evaluated, and known gaps.
 
-### What's in each phase
+### Phases shipped
 
 - **Phase 1 — Dataset pipeline**: loader, leakage-safe scaler, stratified splits, EDA notebook, 9 tests
-- **Phase 2 — Modeling**: model registry (`logreg`, `lightgbm`), training loop with checkpoint + resume, evaluation harness (PR-AUC + recall@FPR + threshold tuning), per-experiment config snapshot, Colab training notebook, `FraudPredictor` for inference, 16 tests
+- **Phase 2 — Baseline (LogReg)**: training entry point, model registry (`logreg`, `lightgbm`), evaluation harness (precision, recall, F1, ROC-AUC, PR-AUC, recall@FPR, confusion matrix), `FraudPredictor` inference, 19 tests
+
+### Phases NOT yet started
+
+Phase 3 (XGBoost primary), Phase 4 (synthetic environment), Phases 5–11 (features, profiling, anomaly, rules, graph, risk fusion), Phases 12–15 (LLM copilot), Phase 16 (final export). See `Finsheild - ML-FIRST DEVELOPMENT PLAN.md`.
 
 ## Development Setup
 
 Local development is CPU-only and lightweight.
 
 ```bash
-# Recommended: use a virtual env
 python3 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
+pip install -e ".[dev]"   # adds pytest
 ```
 
 Python 3.11+ required (developed on 3.12).
 
-### Local sanity checks (no training)
+### Local sanity checks
 
 ```bash
-pytest tests/ -v          # 25 tests, ~15s; uses data/raw/creditcard.csv if present
-python scripts/download_dataset.py --dry-run        # prints acquisition plan
-python scripts/download_dataset.py --synthetic --n 5000  # creates a tiny CSV for tests
+pytest tests/ -v          # 28 tests, ~15s
+python scripts/download_dataset.py --synthetic --n 5000
+python -m finsheild.train --model logreg    # trains Phase 2 baseline
 ```
 
 ## Colab Setup (primary training environment)
 
-**Do not train on your laptop** — Colab is the designated training runtime per `AGENTS.md` and the README of Phase 1.
+**Do not train on your laptop** — Colab is the designated training runtime per `AGENTS.md` and the Phase 1 README.
 
-1. Open `notebooks/Finsheild_Training.ipynb` in Google Colab (GPU or CPU runtime — LightGBM is CPU-native; this dataset trains in seconds either way).
-2. In **Cell 2**, set `REPO_URL` to your fork (e.g. `https://github.com/<you>/Finsheild.git`). Leave it blank if you uploaded the repo as a zip.
-3. **Cell 5** uses Kaggle creds from Colab Secrets when set (`KAGGLE_USERNAME`, `KAGGLE_KEY`); falls back to synthetic data otherwise.
-4. **Cell 6** runs `python -m finsheild.train` and writes artifacts to `models/`, `checkpoints/`, `results/` under the repo, then mirrors to `Drive/MyDrive/Finsheild/`.
-5. **Cell 8** syncs the trained model + metrics to Drive.
-
-If you can't pull from a remote yet, the notebook still runs end-to-end — just upload the repo via Colab's file panel.
+1. Open `notebooks/Finsheild_Training.ipynb` in Google Colab.
+2. In **Cell 2**, set `REPO_URL` to your fork.
+3. **Cell 5** uses Kaggle creds from Colab Secrets when set; falls back to synthetic data otherwise.
+4. **Cell 6** runs `python -m finsheild.train --model logreg` (Phase 2) and writes artifacts to `models/baseline/`, `evaluation/reports/`, `evaluation/figures/`, then mirrors to Drive.
 
 ## Dataset Setup
 
@@ -68,68 +69,44 @@ If you can't pull from a remote yet, the notebook still runs end-to-end — just
   - `python scripts/download_dataset.py` (needs `KAGGLE_USERNAME`/`KAGGLE_KEY`)
   - `python scripts/download_dataset.py --synthetic --n 20000` (no creds; smoke test only)
 
-The pipeline is **configurable** — paths come from `finsheild.config.ProjectPaths`. No hardcoded absolute paths.
-
-## Training
+## Training (Phase 2 baseline)
 
 ```bash
-# Train a fresh experiment
-python -m finsheild.train --model lightgbm --experiment experiment_001
+# Train the LogReg baseline (Phase 2)
+python -m finsheild.train --model logreg
 
-# Train the baseline
-python -m finsheild.train --model logreg --experiment experiment_002
+# Train the LightGBM comparison model (output: models/baseline_gbm/)
+python -m finsheild.train --model lightgbm
 
-# Customize hyperparameters
-python -m finsheild.train --model lightgbm --experiment experiment_003 \
-    --lgbm-n-estimators 1000 --lgbm-learning-rate 0.03 --lgbm-num-leaves 63
+# XGBoost is wired but not yet implemented — Phase 3
+python -m finsheild.train --model xgboost   # fails loud until Phase 3 lands
 ```
 
-Outputs (per experiment, never overwritten — pick a unique name):
+### Output layout
+
+Per-model directory (strict, from the plan's Phase 16):
 
 ```
-models/experiment_001/
-  model.joblib          # trained model
-  scaler.joblib         # FraudPreprocessor (from data/processed/)
-  threshold.json        # tuned operating threshold (recall-max @ FPR=1%)
-results/experiment_001/
-  config.json           # full config snapshot (paths, params, dataset info)
-  metrics.json          # final test-set metrics
-  pr_curve.png          # precision-recall curve
-  roc_curve.png         # ROC curve
+models/baseline/                  # Phase 2 LogReg artifacts
+  model.joblib                    # trained classifier
+  scaler.joblib                   # FraudPreprocessor (Amount, Time scaled, fit on train only)
+  threshold.json                  # tuned operating threshold (recall-max @ FPR=1%)
+  metrics.json                    # test metrics: precision/recall/F1/ROC-AUC/PR-AUC/confusion
+  config.json                     # full config snapshot
+
+evaluation/
+  reports/baseline_report.md      # human-readable report
+  reports/baseline_metrics.json   # test metrics (JSON, same as models/baseline/metrics.json)
+  figures/baseline_pr_curve.png
+  figures/baseline_roc_curve.png
+  figures/baseline_confusion_matrix.png
 ```
-
-Each run also appends a summary line to `results/metrics.jsonl` for cross-experiment comparison.
-
-## Resume Training
-
-Colab runtimes can terminate mid-training. To resume:
-
-```bash
-python -m finsheild.train --model lightgbm --experiment experiment_001 \
-    --resume --max-epochs 50
-```
-
-The `--resume` flag picks up the LightGBM booster from `checkpoints/<experiment>/last.estimator` and continues boosting. Set `FINSHEILD_CHECKPOINTS_DIR` to a Drive path (e.g. `/content/drive/MyDrive/Finsheild/checkpoints`) to persist across Colab sessions.
 
 ## Evaluation
 
-Primary metric: **PR-AUC** (average precision) — best for extreme class imbalance.
+Per the plan's Phase 2 metric set: **precision, recall, F1, ROC-AUC, PR-AUC, confusion matrix**. Also reported for operational use: recall @ target FPR (default 1%) and the val-tuned operating threshold.
 
-Also reported:
-- ROC-AUC (for sanity)
-- **Recall @ target FPR** (default 1%) — closest to operational reality
-- Precision / recall / F1 at the **val-tuned threshold**
-
-Reproduce an evaluation on a saved model:
-
-```python
-from finsheild.inference import FraudPredictor
-pred = FraudPredictor.load(
-    "models/experiment_001/model.joblib",
-    "models/experiment_001/scaler.joblib",
-    threshold=0.5,  # or read from models/experiment_001/threshold.json
-)
-```
+The report at `evaluation/reports/baseline_report.md` is the human-readable summary; the JSON at `models/baseline/metrics.json` is machine-readable.
 
 ## Inference
 
@@ -138,8 +115,8 @@ The app-facing API lives in `finsheild.inference.FraudPredictor`:
 ```python
 from finsheild.inference import FraudPredictor
 
-pred = FraudPredictor.load("models/experiment_001/model.joblib",
-                           "models/experiment_001/scaler.joblib",
+pred = FraudPredictor.load("models/baseline/model.joblib",
+                           "models/baseline/scaler.joblib",
                            threshold=0.05)
 
 # Single transaction — this is what the future app will call
@@ -154,69 +131,58 @@ scored = pred.predict_df(df)
 scored.to_csv("scored.csv", index=False)
 ```
 
-The core shape is `predict_proba(X: pd.DataFrame) -> np.ndarray`. The thin wrappers share the same code path.
-
-## Experiment Management
-
-Experiments are addressed by name. Each experiment is independent and reproducible from:
-
-- `results/<name>/config.json` — full config snapshot
-- `models/<name>/` — trained artifact
-- Dataset version pinned implicitly via the raw CSV (commit it to DVC / external storage for true reproducibility)
-
-Cross-experiment metrics live in `results/metrics.jsonl` (one JSON object per line).
+Note: `FraudPredictor` is currently a single-model wrapper around the LogReg baseline. The multi-signal `RiskFusion` engine (Phase 10) is not yet built; this interface will be wrapped/extended in Phase 10.
 
 ## Troubleshooting
 
 | Symptom | Cause | Fix |
 |---|---|---|
-| `ModuleNotFoundError: finsheild` | cwd not at repo root | `cd Finsheild && python -m finsheild.train ...` (not `python src/finsheild/train.py`) |
+| `ModuleNotFoundError: finsheild` | cwd not at repo root | `cd Finsheild && python -m finsheild.train ...` |
 | `Raw dataset missing` | no CSV at expected path | Run `scripts/download_dataset.py` or `--synthetic`; or set `FINSHEILD_RAW_CSV` |
+| `Unknown model 'xgboost'` then `not yet wired up` | Expected — Phase 3 | Wait for Phase 3; use `--model logreg` for Phase 2 |
 | Drive mirror fails with `OSError: [Errno 5]` | Drive not mounted | Run notebook Cell 4 (mounts Drive) |
-| Training interrupted | Colab runtime dropped | Re-run training with `--resume` |
-| `lightgbm` install fails | Missing build deps on Python 3.14 | Use Python 3.11–3.12 (the venv in `requirements.txt` was tested on 3.12) |
-| Low PR-AUC on synthetic data | Synthetic CSV has no real fraud signal | Expected; synthetic is for pipeline testing only — use real Kaggle data for real metrics |
 | Threshold tuned to 0.0 | Class is too rare in val (target FPR unattainable) | Increase `--target-fpr` or use more data |
+| Low PR-AUC on synthetic data | Synthetic CSV has no real fraud signal | Expected; synthetic is for pipeline testing only |
 
 ## Repository Layout
 
 ```
 Finsheild/
 ├── README.md, AGENTS.md, pyproject.toml
+├── LICENSE (MIT)
 ├── requirements.txt, requirements-colab.txt, .gitignore
 ├── config/dataset.yaml                 # dataset config (paths, schema, splits)
-├── data/
-│   ├── raw/                            # gitignored
-│   ├── processed/                      # gitignored
-│   └── README.md
+├── data/{raw,processed}/               # gitignored
 ├── src/finsheild/
 │   ├── __init__.py, config.py          # centralized paths + training defaults
-│   ├── data/                           # loader, preprocessing, splits (Phase 1)
-│   ├── model.py                        # registry: logreg, lightgbm
-│   ├── evaluation.py                   # PR-AUC, ROC-AUC, recall@FPR, threshold tuning, plots
-│   ├── train.py                        # training entry point + checkpoint/resume
-│   └── inference.py                    # FraudPredictor for the future app
+│   ├── data/                           # Phase 1: loader, preprocessing, splits
+│   ├── model.py                        # Phase 2+: registry (logreg, lightgbm; xgboost = Phase 3)
+│   ├── evaluation.py                   # Phase 2: precision/recall/F1/ROC-AUC/PR-AUC/confusion + plots
+│   ├── train.py                        # Phase 2: training entry, MODEL_OUTPUT_DIR routes to models/<phase>/
+│   └── inference.py                    # FraudPredictor (single-model wrapper)
 ├── tests/
 │   ├── test_data_pipeline.py           # 9 tests (Phase 1)
-│   └── test_model_pipeline.py          # 16 tests (Phase 2)
+│   └── test_model_pipeline.py          # 19 tests (Phase 2)
 ├── scripts/download_dataset.py         # Kaggle + synthetic fallback
 ├── notebooks/
 │   ├── 02_eda.ipynb                    # local EDA
 │   ├── Finsheild_Training.ipynb        # Colab training orchestrator
-│   └── colab/01_dataset.ipynb          # Colab dataset-only notebook (Phase 1)
+│   └── colab/01_dataset.ipynb          # Phase 1 Colab data notebook
 ├── docs/dataset.md                     # dataset rationale + candidates + gaps
-├── evaluation/                         # Phase 1 evaluation artifacts (gitignored figures)
-├── models/                             # final trained artifacts (gitignored, with README)
-├── checkpoints/                        # resume state (gitignored, with README)
-└── results/                            # per-experiment metrics + plots (gitignored, with README)
+├── evaluation/                         # reports/*.md + metrics.json + figures/*.png
+├── models/                             # per-model artifacts (Phase 16 layout)
+│   ├── baseline/                       # Phase 2 LogReg (gitignored contents)
+│   ├── baseline_gbm/                   # LightGBM comparison (gitignored contents)
+│   ├── xgboost/                        # Phase 3 (empty)
+│   ├── anomaly/                        # Phase 7 (empty)
+│   ├── risk_fusion/                    # Phase 10 (empty)
+│   └── llm/adapter/                    # Phase 15 (empty)
+├── checkpoints/                        # (Phase 2 trains in one shot; no checkpoints yet)
+└── results/                            # (Phase 16 final-export placeholder)
 ```
 
 ## Compute Rule (do not violate)
 
 - **Local**: writing code, editing, git, lightweight testing, repository management.
-- **Colab**: any GPU/CPU-intensive workload — dataset processing at scale, model training, evaluation, experiments, trained-model artifacts.
+- **Colab**: any GPU/CPU-intensive workload — model training, evaluation, experiments.
 - Do NOT download large pretrained weights or CUDA toolchains to your laptop.
-
-## Where to go next
-
-Phase 2 is wired up. To advance further you'd want: a real training run in Colab on the full 284k dataset, feature engineering experiments, cost-sensitive learning, time-based split evaluation, and eventually the Finsheild application that consumes `FraudPredictor.predict_record`.

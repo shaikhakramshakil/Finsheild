@@ -1,7 +1,7 @@
 """Evaluation metrics + plotting for binary fraud detection.
 
-Primary metric: PR-AUC (average_precision_score).
-Also reported: ROC-AUC, recall@FPR=target, and precision/recall/F1 at the val-tuned threshold.
+Per the project's ML plan (Phase 2): precision, recall, F1, ROC-AUC, PR-AUC, confusion matrix.
+Also reported for operational use: recall at target FPR + precision/recall/F1 at the val-tuned threshold.
 """
 
 from __future__ import annotations
@@ -21,12 +21,13 @@ logger = logging.getLogger(__name__)
 class EvalResult:
     pr_auc: float
     roc_auc: float
+    precision: float          # at the val-tuned threshold
+    recall: float             # at the val-tuned threshold
+    f1: float                 # at the val-tuned threshold
     recall_at_target_fpr: float
     target_fpr: float
     threshold: float
-    precision_at_threshold: float
-    recall_at_threshold: float
-    f1_at_threshold: float
+    confusion_matrix: dict    # {"tn": ..., "fp": ..., "fn": ..., "tp": ...}
     support_pos: int
     support_neg: int
 
@@ -51,15 +52,23 @@ def recall_at_fpr(y_true: np.ndarray, y_score: np.ndarray, target_fpr: float) ->
     """
     from sklearn.metrics import roc_curve
     fpr, tpr, thr = roc_curve(y_true, y_score)
-    # fpr/tpr are sorted ascending by threshold; first threshold with fpr <= target
     mask = fpr <= target_fpr
     if not mask.any():
         return float(tpr[0]), float("inf")
-    idx = np.argmax(tpr[mask])  # highest recall among thresholds meeting FPR target
-    # Re-index into the original arrays
+    idx = np.argmax(tpr[mask])
     true_indices = np.where(mask)[0]
     chosen = true_indices[idx]
     return float(tpr[chosen]), float(thr[chosen])
+
+
+def confusion_dict(y_true: np.ndarray, y_pred: np.ndarray) -> dict[str, int]:
+    y_true = np.asarray(y_true).astype(int)
+    y_pred = np.asarray(y_pred).astype(int)
+    tp = int(((y_pred == 1) & (y_true == 1)).sum())
+    fp = int(((y_pred == 1) & (y_true == 0)).sum())
+    fn = int(((y_pred == 0) & (y_true == 1)).sum())
+    tn = int(((y_pred == 0) & (y_true == 0)).sum())
+    return {"tn": tn, "fp": fp, "fn": fn, "tp": tp}
 
 
 def tune_threshold(y_true: np.ndarray, y_score: np.ndarray, target_fpr: float) -> tuple[float, float, float, float]:
@@ -68,7 +77,6 @@ def tune_threshold(y_true: np.ndarray, y_score: np.ndarray, target_fpr: float) -
     Returns (threshold, precision, recall, f1) at the chosen threshold.
     """
     from sklearn.metrics import precision_recall_fscore_support
-    # Try thresholds at every observed score + a couple of sentinels.
     candidates = np.unique(np.concatenate(([0.0, 1.0], y_score)))
     best = (0.0, 0.0, 0.0, 0.0, 0.0)  # (recall, threshold, precision, f1, fpr)
     for t in candidates:
@@ -88,22 +96,39 @@ def tune_threshold(y_true: np.ndarray, y_score: np.ndarray, target_fpr: float) -
     return threshold, precision, recall, f1
 
 
-def evaluate(y_true: np.ndarray, y_score: np.ndarray, target_fpr: float = 0.01) -> EvalResult:
+def evaluate(y_true: np.ndarray, y_score: np.ndarray, target_fpr: float = 0.01, threshold: float | None = None) -> EvalResult:
+    """Compute the full Phase 2 metric set.
+
+    If `threshold` is None, it's tuned on the same y_true/y_score (typically called on val).
+    If a threshold is passed in (test-time), it's reused for the precision/recall/F1 trio.
+    """
     y_true = np.asarray(y_true).astype(int)
     y_score = np.asarray(y_score, dtype=float)
     pra = pr_auc(y_true, y_score)
     rau = roc_auc(y_true, y_score)
     recall_fpr, _thr_fpr = recall_at_fpr(y_true, y_score, target_fpr)
-    thr, prec, rec, f1 = tune_threshold(y_true, y_score, target_fpr)
+
+    if threshold is None:
+        thr, prec, rec, f1 = tune_threshold(y_true, y_score, target_fpr)
+    else:
+        thr = float(threshold)
+        y_pred = (y_score >= thr).astype(int)
+        from sklearn.metrics import precision_recall_fscore_support
+        p, r, f1, _ = precision_recall_fscore_support(y_true, y_pred, average="binary", zero_division=0)
+        prec, rec = float(p), float(r)
+        f1 = float(f1)
+
+    cm = confusion_dict(y_true, (y_score >= thr).astype(int))
     return EvalResult(
         pr_auc=pra,
         roc_auc=rau,
+        precision=prec,
+        recall=rec,
+        f1=f1,
         recall_at_target_fpr=recall_fpr,
         target_fpr=target_fpr,
         threshold=thr,
-        precision_at_threshold=prec,
-        recall_at_threshold=rec,
-        f1_at_threshold=f1,
+        confusion_matrix=cm,
         support_pos=int(y_true.sum()),
         support_neg=int((1 - y_true).sum()),
     )
@@ -155,6 +180,31 @@ def plot_roc_curve(y_true: np.ndarray, y_score: np.ndarray, out_path: Path, titl
     ax.set_title(title)
     ax.legend(loc="lower right")
     ax.grid(True, alpha=0.3)
+    out_path = Path(out_path)
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(out_path, dpi=150, bbox_inches="tight")
+    plt.close(fig)
+    return out_path
+
+
+def plot_confusion_matrix(cm: dict[str, int], out_path: Path, title: str = "Confusion Matrix") -> Path:
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    import numpy as np
+
+    matrix = np.array([[cm["tn"], cm["fp"]], [cm["fn"], cm["tp"]]])
+    fig, ax = plt.subplots(figsize=(4.5, 4))
+    im = ax.imshow(matrix, cmap="Blues")
+    ax.set_xticks([0, 1]); ax.set_yticks([0, 1])
+    ax.set_xticklabels(["Legit (0)", "Fraud (1)"])
+    ax.set_yticklabels(["Legit (0)", "Fraud (1)"])
+    ax.set_xlabel("Predicted"); ax.set_ylabel("Actual")
+    ax.set_title(title)
+    for i in range(2):
+        for j in range(2):
+            ax.text(j, i, int(matrix[i, j]), ha="center", va="center", color="black")
+    fig.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
     out_path = Path(out_path)
     out_path.parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(out_path, dpi=150, bbox_inches="tight")
