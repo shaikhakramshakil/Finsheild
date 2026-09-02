@@ -3,6 +3,17 @@ data/processed/
 evaluation/figures/
 *.csv
 *.parquet
+*.joblib
 __pycache__/
 .venv/
 .ipynb_checkpoints/
+.pytest_cache/
+*.egg-info/
+dist/
+build/
+# Keep tracking
+!data/README.md
+!evaluation/reports/.gitkeep
+!evaluation/figures/.gitkeep
+!data/raw/.gitkeep
+!data/processed/.gitkeep

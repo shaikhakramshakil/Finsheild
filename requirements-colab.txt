@@ -1,0 +1,10 @@
+# Colab pins — verified on Colab Python 3.10+
+pandas==2.2.2
+scikit-learn==1.5.0
+pyyaml==6.0.1
+matplotlib==3.8.4
+seaborn==0.13.2
+joblib==1.4.2
+kagglehub==0.2.5
+opendatasets==0.1.22
+tqdm==4.66.4

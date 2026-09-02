@@ -1,0 +1,36 @@
+# Finsheild dataset configuration
+dataset:
+  name: "Kaggle Credit Card Fraud Detection (ULB)"
+  source_url: "https://www.kaggle.com/datasets/mlg-ulb/creditcardfraud"
+  license: "See Kaggle dataset page — original data from ULB ML Group"
+  citation: "Andrea Dal Pozzolo, Olivier Caelen, Reid A. Johnson and Gianluca Bontempi. Calibrating Probability with Undersampling for Unbalanced Classification. In Symposium on Computational Intelligence and Data Mining (CIDM), IEEE, 2015."
+  kaggle_slug: "mlg-ulb/creditcardfraud"
+  description: "Transactions by European cardholders over 2 days in Sept 2013 (284,807 rows, 492 frauds). Features V1-V28 are PCA-transformed for confidentiality."
+
+paths:
+  raw_csv: "data/raw/creditcard.csv"
+  processed_dir: "data/processed"
+  scaler_path: "data/processed/scaler.joblib"
+  figures_dir: "evaluation/figures"
+  report_path: "evaluation/reports/dataset_report.md"
+  metrics_path: "evaluation/metrics.json"
+
+schema:
+  target: "Class"
+  features_scale: ["Amount", "Time"]
+  features_pca: ["V1","V2","V3","V4","V5","V6","V7","V8","V9","V10","V11","V12","V13","V14","V15","V16","V17","V18","V19","V20","V21","V22","V23","V24","V25","V26","V27","V28"]
+  expected_columns: ["Time","V1","V2","V3","V4","V5","V6","V7","V8","V9","V10","V11","V12","V13","V14","V15","V16","V17","V18","V19","V20","V21","V22","V23","V24","V25","V26","V27","V28","Amount","Class"]
+
+splits:
+  test_size: 0.15
+  val_size: 0.15
+  random_state: 42
+  stratify: true
+  strategy: "stratified_random_70_15_15"
+  leakage_note: "Prefer stratified random split for now. Time is seconds since first transaction; time-based split is alternative for temporal evaluation but would change distribution. Documented as future option."
+
+preprocessing:
+  scaler: "StandardScaler"
+  fit_on: "train_only"
+  transform_features: ["Amount", "Time"]
+  note: "No leakage — scaler fitted ONLY on train, then transform val/test. Provide fit_transform_train vs transform pattern."

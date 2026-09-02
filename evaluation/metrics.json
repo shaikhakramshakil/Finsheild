@@ -1,0 +1,56 @@
+{
+  "dataset_shape": [
+    10000,
+    31
+  ],
+  "dataset_rows": 10000,
+  "dataset_cols": 31,
+  "class_counts": {
+    "0": 9828,
+    "1": 172
+  },
+  "class_counts_pct": {
+    "0": 0.9828,
+    "1": 0.0172
+  },
+  "missing_values": 0,
+  "duplicated_rows": 0,
+  "split_sizes": {
+    "train": 7000,
+    "val": 1500,
+    "test": 1500
+  },
+  "split_class_counts": {
+    "train": {
+      "0": 6880,
+      "1": 120
+    },
+    "val": {
+      "0": 1474,
+      "1": 26
+    },
+    "test": {
+      "0": 1474,
+      "1": 26
+    }
+  },
+  "scaler_mean": [
+    50.66625714285715,
+    85517.34916720264
+  ],
+  "scaler_scale": [
+    154.0281396159885,
+    49707.09498178243
+  ],
+  "scaler_var": [
+    23724.667793562447,
+    2470795291.52794
+  ],
+  "scale_features": [
+    "Amount",
+    "Time"
+  ],
+  "random_state": 42,
+  "stratify": true,
+  "preprocessing": "StandardScaler fitted ONLY on train (Amount, Time)"
+}
