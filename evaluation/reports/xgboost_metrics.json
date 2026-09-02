@@ -1,0 +1,26 @@
+{
+  "roc_auc": 0.9708696456726845,
+  "pr_auc": 0.8418228664458512,
+  "precision": 0.9206349206349206,
+  "recall": 0.7837837837837838,
+  "f1": 0.8467153284671532,
+  "recall_at_target_fpr": 0.8783783783783784,
+  "target_fpr": 0.01,
+  "threshold": 0.5,
+  "threshold_at_1pct_fpr": 0.0008693562122061849,
+  "confusion_matrix": {
+    "tn": 42643,
+    "fp": 5,
+    "fn": 16,
+    "tp": 58
+  },
+  "support_pos": 74,
+  "support_neg": 42648,
+  "train_seconds": 11.545648336410522,
+  "splits": {
+    "train": 199364,
+    "val": 42721,
+    "test": 42722
+  },
+  "data": "real ULB Kaggle (284,807 rows, 0.17% fraud)"
+}

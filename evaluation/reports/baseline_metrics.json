@@ -1,18 +1,26 @@
 {
-  "pr_auc": 0.02672515832488618,
-  "roc_auc": 0.5927356225863688,
-  "precision": 0.0,
-  "recall": 0.0,
-  "f1": 0.0,
-  "recall_at_target_fpr": 0.0,
+  "roc_auc": 0.9495321855338738,
+  "pr_auc": 0.7005165379543252,
+  "precision": 0.819672131147541,
+  "recall": 0.6756756756756757,
+  "f1": 0.7407407407407407,
+  "recall_at_target_fpr": 0.8513513513513513,
   "target_fpr": 0.01,
-  "threshold": 0.11639439458129265,
+  "threshold": 0.5,
+  "threshold_at_1pct_fpr": 0.005495581277032491,
   "confusion_matrix": {
-    "tn": 732,
-    "fp": 5,
-    "fn": 13,
-    "tp": 0
+    "tn": 42637,
+    "fp": 11,
+    "fn": 24,
+    "tp": 50
   },
-  "support_pos": 13,
-  "support_neg": 737
+  "support_pos": 74,
+  "support_neg": 42648,
+  "train_seconds": 1.0,
+  "splits": {
+    "train": 199364,
+    "val": 42721,
+    "test": 42722
+  },
+  "data": "real ULB Kaggle (284,807 rows, 0.17% fraud)"
 }

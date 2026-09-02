@@ -1,27 +1,25 @@
-# Baseline Report — baseline
+# logreg Report — REAL ULB (284k)
 
 Model: `logreg`
-Phase: 2 (baseline classifier)
+Data: Real Kaggle ULB (284,807 rows, 492 frauds, 0.17% fraud rate)
 
-## Test metrics
-- Precision: 0.0000
-- Recall:    0.0000
-- F1:        0.0000
-- ROC-AUC:   0.5927
-- PR-AUC:    0.0267
-- Recall @ FPR=1.00%: 0.0000
+## Test metrics (holdout n=42722, threshold=0.5)
+- Precision: 0.8197
+- Recall:    0.6757
+- F1:        0.7407
+- ROC-AUC:   0.9495
+- PR-AUC:    0.7005
+- Recall @ FPR=1.00%: 0.8514 (threshold 0.0055 on val)
 
-## Confusion matrix (test, threshold=0.1164)
+## Confusion matrix (test, threshold=0.5)
 |        | Predicted legit | Predicted fraud |
 |--------|-----------------|-----------------|
-| Actual legit | 732 | 5 |
-| Actual fraud | 13 | 0 |
+| Actual legit | 42637 | 11 |
+| Actual fraud | 24 | 50 |
 
-Support: 737 legit, 13 fraud
-Threshold tuned on val: 0.1164
+Support: 42648 legit, 74 fraud
 
 ## Training
-- Train seconds: 0.1
-- Splits: {'train': 3500, 'val': 750, 'test': 750}
+- Splits: train 199364, val 42721, test 42722
 
-Figures: `evaluation/figures/{out_dir}_pr_curve.png`, `{out_dir}_roc_curve.png`, `{out_dir}_confusion_matrix.png`
+PR vs random baseline (0.0017): 404.4x lift
