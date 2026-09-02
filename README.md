@@ -1,6 +1,6 @@
 # Finsheild
 
-ML-first digital-payment fraud intelligence platform. The current scope is **Phase 1 (dataset pipeline) and Phase 2 (LogReg baseline)** of the project's 16-phase ML plan. The user-facing application is built later.
+ML-first digital-payment fraud intelligence platform. Current scope: **Phase 1 (dataset) + Phase 2 (LogReg baseline) + Phase 3 (XGBoost primary)** of the project's 16-phase ML plan. The user-facing application is built later.
 
 ## Project Overview
 
@@ -12,8 +12,8 @@ data/raw/creditcard.csv
 train / val / test (stratified 70/15/15, seed 42)
       ↓  FraudPreprocessor (scaler fit ONLY on train)
 scaled features
-      ↓  train.py → logreg
-models/baseline/ + evaluation/{reports,figures}/
+      ↓  train.py → logreg | xgboost | lightgbm
+models/{baseline,xgboost,baseline_gbm}/ + evaluation/{reports,figures}/
       ↓  inference.FraudPredictor
 fraud_prob / is_fraud
 ```
@@ -23,11 +23,14 @@ The data task is binary fraud detection on the Kaggle Credit Card Fraud (ULB) da
 ### Phases shipped
 
 - **Phase 1 — Dataset pipeline**: loader, leakage-safe scaler, stratified splits, EDA notebook, 9 tests
-- **Phase 2 — Baseline (LogReg)**: training entry point, model registry (`logreg`, `lightgbm`), evaluation harness (precision, recall, F1, ROC-AUC, PR-AUC, recall@FPR, confusion matrix), `FraudPredictor` inference, 19 tests
+- **Phase 2 — Baseline (LogReg)**: training entry point, model registry, evaluation harness (precision, recall, F1, ROC-AUC, PR-AUC, recall@FPR, confusion matrix), `FraudPredictor` inference
+- **Phase 3 — XGBoost (primary classifier)**: tree-based primary with PR-AUC early stopping, full hyperparameter control via CLI flags
+
+Total: 31 tests (9 Phase 1 + 22 Phase 2/3). XGBoost-specific tests are skipped on environments without `xgboost` installed and run in CI.
 
 ### Phases NOT yet started
 
-Phase 3 (XGBoost primary), Phase 4 (synthetic environment), Phases 5–11 (features, profiling, anomaly, rules, graph, risk fusion), Phases 12–15 (LLM copilot), Phase 16 (final export). See `Finsheild - ML-FIRST DEVELOPMENT PLAN.md`.
+Phase 4 (synthetic environment), Phases 5–11 (features, profiling, anomaly, rules, graph, risk fusion), Phases 12–15 (LLM copilot), Phase 16 (final export). See `Finsheild - ML-FIRST DEVELOPMENT PLAN.md`.
 
 ## Development Setup
 
@@ -45,9 +48,10 @@ Python 3.11+ required (developed on 3.12).
 ### Local sanity checks
 
 ```bash
-pytest tests/ -v          # 28 tests, ~15s
+pytest tests/ -v          # 31 tests, ~15s (3 xgb tests skip without xgboost installed)
 python scripts/download_dataset.py --synthetic --n 5000
-python -m finsheild.train --model logreg    # trains Phase 2 baseline
+python -m finsheild.train --model logreg    # Phase 2 baseline
+python -m finsheild.train --model xgboost   # Phase 3 primary
 ```
 
 ## Colab Setup (primary training environment)
@@ -57,7 +61,9 @@ python -m finsheild.train --model logreg    # trains Phase 2 baseline
 1. Open `notebooks/Finsheild_Training.ipynb` in Google Colab.
 2. In **Cell 2**, set `REPO_URL` to your fork.
 3. **Cell 5** uses Kaggle creds from Colab Secrets when set; falls back to synthetic data otherwise.
-4. **Cell 6** runs `python -m finsheild.train --model logreg` (Phase 2) and writes artifacts to `models/baseline/`, `evaluation/reports/`, `evaluation/figures/`, then mirrors to Drive.
+4. **Cell 6** runs `python -m finsheild.train --model xgboost` (Phase 3 primary) and writes artifacts to `models/xgboost/`, `evaluation/reports/`, `evaluation/figures/`, then mirrors to Drive.
+
+For Phase 2 baseline specifically, change `MODEL = "logreg"` in Cell 6.
 
 ## Dataset Setup
 
@@ -69,69 +75,79 @@ python -m finsheild.train --model logreg    # trains Phase 2 baseline
   - `python scripts/download_dataset.py` (needs `KAGGLE_USERNAME`/`KAGGLE_KEY`)
   - `python scripts/download_dataset.py --synthetic --n 20000` (no creds; smoke test only)
 
-## Training (Phase 2 baseline)
+## Training
+
+### Phase 2 — LogReg baseline
 
 ```bash
-# Train the LogReg baseline (Phase 2)
 python -m finsheild.train --model logreg
-
-# Train the LightGBM comparison model (output: models/baseline_gbm/)
-python -m finsheild.train --model lightgbm
-
-# XGBoost is wired but not yet implemented — Phase 3
-python -m finsheild.train --model xgboost   # fails loud until Phase 3 lands
 ```
 
-### Output layout
+### Phase 3 — XGBoost primary
 
-Per-model directory (strict, from the plan's Phase 16):
+```bash
+# Defaults (n_estimators=500, lr=0.05, max_depth=6, aucpr early stopping)
+python -m finsheild.train --model xgboost
+
+# Tune
+python -m finsheild.train --model xgboost \
+    --xgb-n-estimators 1000 --xgb-learning-rate 0.03 --xgb-max-depth 8
+
+# Available flags
+python -m finsheild.train --model xgboost --help
+```
+
+### Comparison — LightGBM
+
+```bash
+python -m finsheild.train --model lightgbm   # → models/baseline_gbm/
+```
+
+### Output layout (strict, per Phase 16 plan)
 
 ```
-models/baseline/                  # Phase 2 LogReg artifacts
-  model.joblib                    # trained classifier
-  scaler.joblib                   # FraudPreprocessor (Amount, Time scaled, fit on train only)
-  threshold.json                  # tuned operating threshold (recall-max @ FPR=1%)
-  metrics.json                    # test metrics: precision/recall/F1/ROC-AUC/PR-AUC/confusion
-  config.json                     # full config snapshot
+models/baseline/                  # Phase 2 LogReg
+  model.joblib, scaler.joblib, threshold.json, metrics.json, config.json
+models/xgboost/                   # Phase 3 XGBoost (primary)
+  model.joblib, scaler.joblib, threshold.json, metrics.json, config.json
+models/baseline_gbm/              # LightGBM comparison
+  same shape
 
 evaluation/
-  reports/baseline_report.md      # human-readable report
-  reports/baseline_metrics.json   # test metrics (JSON, same as models/baseline/metrics.json)
-  figures/baseline_pr_curve.png
-  figures/baseline_roc_curve.png
-  figures/baseline_confusion_matrix.png
+  reports/{baseline,xgboost}_report.md        # human-readable
+  reports/{baseline,xgboost}_metrics.json     # test metrics
+  figures/{baseline,xgboost}_{pr_curve,roc_curve,confusion_matrix}.png
 ```
 
 ## Evaluation
 
-Per the plan's Phase 2 metric set: **precision, recall, F1, ROC-AUC, PR-AUC, confusion matrix**. Also reported for operational use: recall @ target FPR (default 1%) and the val-tuned operating threshold.
+Per the plan's Phase 2 metric set: **precision, recall, F1, ROC-AUC, PR-AUC, confusion matrix**. Also reported: recall @ target FPR (default 1%) and the val-tuned operating threshold.
 
-The report at `evaluation/reports/baseline_report.md` is the human-readable summary; the JSON at `models/baseline/metrics.json` is machine-readable.
+XGBoost uses `eval_metric="aucpr"` internally for early stopping — matches our primary metric.
 
 ## Inference
-
-The app-facing API lives in `finsheild.inference.FraudPredictor`:
 
 ```python
 from finsheild.inference import FraudPredictor
 
-pred = FraudPredictor.load("models/baseline/model.joblib",
-                           "models/baseline/scaler.joblib",
+# Phase 3 primary
+pred = FraudPredictor.load("models/xgboost/model.joblib",
+                           "models/xgboost/scaler.joblib",
                            threshold=0.05)
 
-# Single transaction — this is what the future app will call
+# Single transaction
 record = {"Time": 12345, "V1": -1.4, "V2": 0.3, ..., "V28": 0.1, "Amount": 87.50}
 result = pred.predict_record(record)
 # -> {"fraud_prob": 0.83, "threshold": 0.05, "is_fraud": 1}
 
-# Batch (CSV → scored CSV)
+# Batch
 import pandas as pd
 df = pd.read_csv("new_transactions.csv")
 scored = pred.predict_df(df)
 scored.to_csv("scored.csv", index=False)
 ```
 
-Note: `FraudPredictor` is currently a single-model wrapper around the LogReg baseline. The multi-signal `RiskFusion` engine (Phase 10) is not yet built; this interface will be wrapped/extended in Phase 10.
+`FraudPredictor` is currently a single-model wrapper. The multi-signal `RiskFusion` engine (Phase 10) will replace/extend this in a later phase.
 
 ## Troubleshooting
 
@@ -139,10 +155,10 @@ Note: `FraudPredictor` is currently a single-model wrapper around the LogReg bas
 |---|---|---|
 | `ModuleNotFoundError: finsheild` | cwd not at repo root | `cd Finsheild && python -m finsheild.train ...` |
 | `Raw dataset missing` | no CSV at expected path | Run `scripts/download_dataset.py` or `--synthetic`; or set `FINSHEILD_RAW_CSV` |
-| `Unknown model 'xgboost'` then `not yet wired up` | Expected — Phase 3 | Wait for Phase 3; use `--model logreg` for Phase 2 |
+| `ModuleNotFoundError: xgboost` | xgboost not installed locally | `pip install xgboost` (already in `requirements.txt`); CI installs it |
 | Drive mirror fails with `OSError: [Errno 5]` | Drive not mounted | Run notebook Cell 4 (mounts Drive) |
-| Threshold tuned to 0.0 | Class is too rare in val (target FPR unattainable) | Increase `--target-fpr` or use more data |
-| Low PR-AUC on synthetic data | Synthetic CSV has no real fraud signal | Expected; synthetic is for pipeline testing only |
+| Low PR-AUC on synthetic data | Synthetic CSV has no real fraud signal | Expected; use real Kaggle data for real metrics |
+| Threshold tuned to 0.0 | Class too rare in val (target FPR unattainable) | Increase `--target-fpr` |
 
 ## Repository Layout
 
@@ -150,35 +166,31 @@ Note: `FraudPredictor` is currently a single-model wrapper around the LogReg bas
 Finsheild/
 ├── README.md, AGENTS.md, pyproject.toml
 ├── LICENSE (MIT)
+├── "Finsheild - ML-FIRST DEVELOPMENT PLAN.md"   # 16-phase plan
 ├── requirements.txt, requirements-colab.txt, .gitignore
-├── config/dataset.yaml                 # dataset config (paths, schema, splits)
-├── data/{raw,processed}/               # gitignored
+├── config/dataset.yaml
+├── data/{raw,processed}/                       # gitignored
 ├── src/finsheild/
-│   ├── __init__.py, config.py          # centralized paths + training defaults
-│   ├── data/                           # Phase 1: loader, preprocessing, splits
-│   ├── model.py                        # Phase 2+: registry (logreg, lightgbm; xgboost = Phase 3)
-│   ├── evaluation.py                   # Phase 2: precision/recall/F1/ROC-AUC/PR-AUC/confusion + plots
-│   ├── train.py                        # Phase 2: training entry, MODEL_OUTPUT_DIR routes to models/<phase>/
-│   └── inference.py                    # FraudPredictor (single-model wrapper)
+│   ├── __init__.py, config.py
+│   ├── data/                                   # Phase 1
+│   ├── model.py                                # Phase 2/3 registry: logreg, xgboost, lightgbm
+│   ├── evaluation.py                           # Phase 2/3: precision/recall/F1/ROC-AUC/PR-AUC/confusion + plots
+│   ├── train.py                                # MODEL_OUTPUT_DIR routes to models/<phase>/
+│   └── inference.py                            # FraudPredictor
 ├── tests/
-│   ├── test_data_pipeline.py           # 9 tests (Phase 1)
-│   └── test_model_pipeline.py          # 19 tests (Phase 2)
-├── scripts/download_dataset.py         # Kaggle + synthetic fallback
+│   ├── test_data_pipeline.py                   # 9 tests (Phase 1)
+│   └── test_model_pipeline.py                  # 22 tests (Phase 2/3; 3 xgb skipped if not installed)
+├── scripts/download_dataset.py
 ├── notebooks/
-│   ├── 02_eda.ipynb                    # local EDA
-│   ├── Finsheild_Training.ipynb        # Colab training orchestrator
-│   └── colab/01_dataset.ipynb          # Phase 1 Colab data notebook
-├── docs/dataset.md                     # dataset rationale + candidates + gaps
-├── evaluation/                         # reports/*.md + metrics.json + figures/*.png
-├── models/                             # per-model artifacts (Phase 16 layout)
-│   ├── baseline/                       # Phase 2 LogReg (gitignored contents)
-│   ├── baseline_gbm/                   # LightGBM comparison (gitignored contents)
-│   ├── xgboost/                        # Phase 3 (empty)
-│   ├── anomaly/                        # Phase 7 (empty)
-│   ├── risk_fusion/                    # Phase 10 (empty)
-│   └── llm/adapter/                    # Phase 15 (empty)
-├── checkpoints/                        # (Phase 2 trains in one shot; no checkpoints yet)
-└── results/                            # (Phase 16 final-export placeholder)
+│   ├── 02_eda.ipynb, Finsheild_Training.ipynb
+│   └── colab/01_dataset.ipynb
+├── docs/dataset.md
+├── evaluation/{reports,figures}/
+└── models/
+    ├── baseline/                               # Phase 2 LogReg
+    ├── baseline_gbm/                           # LightGBM comparison
+    ├── xgboost/                                # Phase 3 XGBoost
+    ├── anomaly/, risk_fusion/, llm/adapter/    # Phase 7/10/15 stubs
 ```
 
 ## Compute Rule (do not violate)

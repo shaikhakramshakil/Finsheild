@@ -1,8 +1,9 @@
 """Model registry — single place that maps a name to an unwrapped estimator.
 
-Per the project's CRITICAL RULE: nothing about the actual ML task is invented here.
-The registry exposes two families chosen in the design discussion (logistic regression
-baseline + LightGBM primary). Adding new models = add a builder to MODEL_REGISTRY.
+Per the project's ML plan:
+  Phase 2: logreg    (interpretable baseline)
+  Phase 3: xgboost   (primary supervised classifier)
+  Comparison: lightgbm
 """
 
 from __future__ import annotations
@@ -54,6 +55,28 @@ def _build_lightgbm():
     )
 
 
+def _build_xgboost():
+    import xgboost as xgb
+    return xgb.XGBClassifier(
+        n_estimators=500,
+        learning_rate=0.05,
+        max_depth=6,
+        min_child_weight=1,
+        subsample=0.8,
+        colsample_bytree=0.8,
+        gamma=0.0,
+        reg_alpha=0.0,
+        reg_lambda=1.0,
+        objective="binary:logistic",
+        eval_metric="aucpr",  # PR-AUC for early stopping (matches our primary metric)
+        tree_method="hist",  # CPU-friendly; switch to "gpu_hist" when GPU available
+        random_state=42,
+        n_jobs=-1,
+        # No scale_pos_weight — imbalance handled via threshold tuning on val.
+        verbosity=0,
+    )
+
+
 MODEL_REGISTRY: dict[str, ModelSpec] = {
     "logreg": ModelSpec(
         name="logreg",
@@ -67,6 +90,12 @@ MODEL_REGISTRY: dict[str, ModelSpec] = {
         supports_resume=True,  # LGBM supports init_model= for warm start
         has_proba=True,
     ),
+    "xgboost": ModelSpec(
+        name="xgboost",
+        builder=_build_xgboost,
+        supports_resume=False,  # XGBoost sklearn API refits via xgb_model=; not wired in train.py
+        has_proba=True,
+    ),
 }
 
 
@@ -74,25 +103,35 @@ def build_model(name: str, **overrides: Any) -> Any:
     """Instantiate a model by name. Overrides are passed as kwargs to the builder."""
     if name not in MODEL_REGISTRY:
         raise KeyError(f"Unknown model '{name}'. Available: {list(MODEL_REGISTRY)}")
-    spec = MODEL_REGISTRY[name]
-    if overrides:
-        # Build with overrides — call the builder with kwargs. For our two cases, this
-        # means we rebuild the estimator directly via the class to accept kwargs.
-        if name == "logreg":
-            from sklearn.linear_model import LogisticRegression
-            base = {"C": 1.0, "max_iter": 1000, "solver": "lbfgs", "random_state": 42}
-            base.update(overrides)
-            return LogisticRegression(**base)
-        if name == "lightgbm":
-            import lightgbm as lgb
-            base = {
-                "n_estimators": 500, "learning_rate": 0.05, "num_leaves": 31,
-                "min_child_samples": 20, "subsample": 0.8, "subsample_freq": 1,
-                "colsample_bytree": 0.8, "random_state": 42, "n_jobs": -1, "verbose": -1,
-            }
-            base.update(overrides)
-            return lgb.LGBMClassifier(**base)
-    return spec.builder()
+    if not overrides:
+        return MODEL_REGISTRY[name].builder()
+
+    if name == "logreg":
+        from sklearn.linear_model import LogisticRegression
+        base = {"C": 1.0, "max_iter": 1000, "solver": "lbfgs", "random_state": 42}
+        base.update(overrides)
+        return LogisticRegression(**base)
+    if name == "lightgbm":
+        import lightgbm as lgb
+        base = {
+            "n_estimators": 500, "learning_rate": 0.05, "num_leaves": 31,
+            "min_child_samples": 20, "subsample": 0.8, "subsample_freq": 1,
+            "colsample_bytree": 0.8, "random_state": 42, "n_jobs": -1, "verbose": -1,
+        }
+        base.update(overrides)
+        return lgb.LGBMClassifier(**base)
+    if name == "xgboost":
+        import xgboost as xgb
+        base = {
+            "n_estimators": 500, "learning_rate": 0.05, "max_depth": 6,
+            "min_child_weight": 1, "subsample": 0.8, "colsample_bytree": 0.8,
+            "gamma": 0.0, "reg_alpha": 0.0, "reg_lambda": 1.0,
+            "objective": "binary:logistic", "eval_metric": "aucpr",
+            "tree_method": "hist", "random_state": 42, "n_jobs": -1, "verbosity": 0,
+        }
+        base.update(overrides)
+        return xgb.XGBClassifier(**base)
+    raise KeyError(f"Unknown model '{name}'")
 
 
 def list_models() -> list[str]:

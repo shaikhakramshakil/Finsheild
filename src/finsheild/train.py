@@ -1,9 +1,9 @@
 """Training entry point — `python -m finsheild.train`.
 
-Per the project's ML plan (Phase 2 = LogReg baseline, Phase 3 = XGBoost, comparison model = LightGBM):
-  --model logreg    → models/baseline/
-  --model lightgbm  → models/baseline_gbm/
-  --model xgboost   → models/xgboost/   (Phase 3)
+Per the project's ML plan:
+  Phase 2: --model logreg    → models/baseline/
+  Phase 3: --model xgboost   → models/xgboost/   (primary supervised classifier)
+  Comparison: --model lightgbm → models/baseline_gbm/
 
 Workflow per run:
   1. Load raw dataset (data/raw/creditcard.csv or --raw-csv override)
@@ -21,17 +21,17 @@ import argparse
 import json
 import logging
 import random
+import shutil
 import sys
 import time
 from pathlib import Path
 
 import joblib
 import numpy as np
-import pandas as pd
 
 from finsheild.config import ProjectPaths, TrainingDefaults, detect_device, snapshot_config
 from finsheild.data.loader import load_raw
-from finsheild.data.preprocessing import FraudPreprocessor, preprocess_splits
+from finsheild.data.preprocessing import preprocess_splits
 from finsheild.data.splits import make_splits
 from finsheild.evaluation import (
     EvalResult,
@@ -41,7 +41,7 @@ from finsheild.evaluation import (
     plot_roc_curve,
     write_metrics,
 )
-from finsheild.model import build_model, predict_proba
+from finsheild.model import predict_proba
 
 logger = logging.getLogger("finsheild.train")
 
@@ -60,6 +60,63 @@ def set_seed(seed: int) -> None:
     np.random.seed(seed)
 
 
+def _train_logreg(X_tr, y_tr, X_va, params):
+    from finsheild.model import build_model
+    model = build_model("logreg", **params)
+    model.fit(X_tr, y_tr)
+    return model, predict_proba(model, X_va)
+
+
+def _train_lightgbm(X_tr, y_tr, X_va, y_va, params):
+    import lightgbm as lgb
+    model = lgb.LGBMClassifier(
+        n_estimators=params["n_estimators"],
+        learning_rate=params["learning_rate"],
+        num_leaves=params["num_leaves"],
+        min_child_samples=params["min_child_samples"],
+        subsample=params["subsample"],
+        subsample_freq=1,
+        colsample_bytree=params["colsample_bytree"],
+        random_state=params["random_state"],
+        n_jobs=-1,
+        verbose=-1,
+    )
+    model.fit(
+        X_tr, y_tr,
+        eval_set=[(X_va, y_va)],
+        eval_metric="average-precision",
+        callbacks=[lgb.early_stopping(stopping_rounds=params["early_stopping_rounds"], verbose=False), lgb.log_evaluation(period=0)],
+    )
+    return model, predict_proba(model, X_va)
+
+
+def _train_xgboost(X_tr, y_tr, X_va, y_va, params):
+    import xgboost as xgb
+    model = xgb.XGBClassifier(
+        n_estimators=params["n_estimators"],
+        learning_rate=params["learning_rate"],
+        max_depth=params["max_depth"],
+        min_child_weight=params["min_child_weight"],
+        subsample=params["subsample"],
+        colsample_bytree=params["colsample_bytree"],
+        gamma=params["gamma"],
+        reg_alpha=params["reg_alpha"],
+        reg_lambda=params["reg_lambda"],
+        objective="binary:logistic",
+        eval_metric="aucpr",  # PR-AUC for early stopping
+        tree_method="hist",
+        random_state=params["random_state"],
+        n_jobs=-1,
+        verbosity=0,
+    )
+    model.fit(
+        X_tr, y_tr,
+        eval_set=[(X_va, y_va)],
+        verbose=False,
+    )
+    return model, predict_proba(model, X_va)
+
+
 def run(args: argparse.Namespace) -> int:
     paths = ProjectPaths().ensure()
     training = TrainingDefaults(
@@ -73,7 +130,12 @@ def run(args: argparse.Namespace) -> int:
     if args.model not in MODEL_OUTPUT_DIR:
         raise SystemExit(f"Unknown model '{args.model}'; expected one of {list(MODEL_OUTPUT_DIR)}")
     out_dir_name = MODEL_OUTPUT_DIR[args.model]
-    phase_name = f"phase2_{out_dir_name}"
+    if out_dir_name in ("baseline",):
+        phase_name = "phase2_baseline"
+    elif out_dir_name == "xgboost":
+        phase_name = "phase3_xgboost"
+    else:
+        phase_name = f"phaseX_{out_dir_name}"
 
     raw_path = Path(args.raw_csv) if args.raw_csv else paths.raw_csv
     if not raw_path.exists():
@@ -84,7 +146,7 @@ def run(args: argparse.Namespace) -> int:
         )
     df = load_raw(raw_path)
     train, val, test = make_splits(df, random_state=training.random_state)
-    train_t, val_t, test_t, pre = preprocess_splits(
+    train_t, val_t, test_t, _pre = preprocess_splits(
         train, val, test,
         scale_features=["Amount", "Time"],
         save_scaler_path=paths.processed_dir / "scaler.joblib",
@@ -100,33 +162,33 @@ def run(args: argparse.Namespace) -> int:
     t0 = time.time()
     if args.model == "logreg":
         params = {"C": args.C, "max_iter": args.max_iter}
-        model = build_model("logreg", **params)
-        model.fit(X_tr, y_tr)
-        proba_va = predict_proba(model, X_va)
+        model, proba_va = _train_logreg(X_tr, y_tr, X_va, params)
     elif args.model == "lightgbm":
-        import lightgbm as lgb
-        model = lgb.LGBMClassifier(
-            n_estimators=args.lgbm_n_estimators,
-            learning_rate=args.lgbm_learning_rate,
-            num_leaves=args.lgbm_num_leaves,
-            min_child_samples=args.lgbm_min_child_samples,
-            subsample=args.lgbm_subsample,
-            subsample_freq=1,
-            colsample_bytree=args.lgbm_colsample_bytree,
-            random_state=training.random_state,
-            n_jobs=-1,
-            verbose=-1,
-        )
-        model.fit(
-            X_tr, y_tr,
-            eval_set=[(X_va, y_va)],
-            eval_metric="average-precision",
-            callbacks=[lgb.early_stopping(stopping_rounds=args.lgbm_early_stopping_rounds, verbose=False), lgb.log_evaluation(period=0)],
-        )
-        proba_va = predict_proba(model, X_va)
+        params = {
+            "n_estimators": args.lgbm_n_estimators,
+            "learning_rate": args.lgbm_learning_rate,
+            "num_leaves": args.lgbm_num_leaves,
+            "min_child_samples": args.lgbm_min_child_samples,
+            "subsample": args.lgbm_subsample,
+            "colsample_bytree": args.lgbm_colsample_bytree,
+            "early_stopping_rounds": args.lgbm_early_stopping_rounds,
+            "random_state": training.random_state,
+        }
+        model, proba_va = _train_lightgbm(X_tr, y_tr, X_va, y_va, params)
     elif args.model == "xgboost":
-        # Phase 3 will fill in the real XGBoost training loop; for now fail loud.
-        raise SystemExit("XGBoost training is not yet wired up — that's Phase 3.")
+        params = {
+            "n_estimators": args.xgb_n_estimators,
+            "learning_rate": args.xgb_learning_rate,
+            "max_depth": args.xgb_max_depth,
+            "min_child_weight": args.xgb_min_child_weight,
+            "subsample": args.xgb_subsample,
+            "colsample_bytree": args.xgb_colsample_bytree,
+            "gamma": args.xgb_gamma,
+            "reg_alpha": args.xgb_reg_alpha,
+            "reg_lambda": args.xgb_reg_lambda,
+            "random_state": training.random_state,
+        }
+        model, proba_va = _train_xgboost(X_tr, y_tr, X_va, y_va, params)
     else:
         raise SystemExit(f"Unknown model {args.model!r}")
     train_seconds = time.time() - t0
@@ -141,7 +203,6 @@ def run(args: argparse.Namespace) -> int:
     out_models.mkdir(parents=True, exist_ok=True)
     model_path = out_models / "model.joblib"
     joblib.dump(model, model_path)
-    import shutil
     shutil.copy2(paths.processed_dir / "scaler.joblib", out_models / "scaler.joblib")
     (out_models / "threshold.json").write_text(json.dumps({"threshold": val_result.threshold, "target_fpr": args.target_fpr}, indent=2))
 
@@ -169,8 +230,8 @@ def run(args: argparse.Namespace) -> int:
     )
     (out_models / "config.json").write_text(json.dumps(snap, indent=2, default=str))
 
-    # Human-readable report (Phase 2 baseline report)
-    _write_baseline_report(out_eval_reports / f"{out_dir_name}_report.md", args.model, out_dir_name, val_result, test_result, train_seconds, snap)
+    # Human-readable report
+    _write_report(out_eval_reports / f"{out_dir_name}_report.md", args.model, out_dir_name, phase_name, val_result, test_result, train_seconds, snap)
 
     logger.info(
         "DONE phase=%s model=%s test_pr_auc=%.4f test_roc_auc=%.4f precision=%.4f recall=%.4f f1=%.4f threshold=%.4f (%.1fs)",
@@ -181,13 +242,14 @@ def run(args: argparse.Namespace) -> int:
     return 0
 
 
-def _write_baseline_report(path: Path, model_name: str, out_dir: str, val_res: EvalResult, test_res: EvalResult, train_seconds: float, snap: dict) -> Path:
+def _write_report(path: Path, model_name: str, out_dir: str, phase: str, val_res: EvalResult, test_res: EvalResult, train_seconds: float, snap: dict) -> Path:
     cm = test_res.confusion_matrix
+    phase_num = phase.split("_")[0].replace("phase", "")
     lines = [
-        f"# Baseline Report — {out_dir}",
+        f"# {out_dir} Report",
         "",
         f"Model: `{model_name}`",
-        f"Phase: 2 (baseline classifier)",
+        f"Phase: {phase_num} ({out_dir})",
         "",
         "## Test metrics",
         f"- Precision: {test_res.precision:.4f}",
@@ -210,7 +272,7 @@ def _write_baseline_report(path: Path, model_name: str, out_dir: str, val_res: E
         f"- Train seconds: {train_seconds:.1f}",
         f"- Splits: {snap['dataset']['splits']}",
         "",
-        "Figures: `evaluation/figures/{out_dir}_pr_curve.png`, `{out_dir}_roc_curve.png`, `{out_dir}_confusion_matrix.png`",
+        f"Figures: `evaluation/figures/{out_dir}_pr_curve.png`, `{out_dir}_roc_curve.png`, `{out_dir}_confusion_matrix.png`",
     ]
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -224,10 +286,10 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--seed", type=int, default=TrainingDefaults.random_state)
     p.add_argument("--raw-csv", default=None, help="Override raw CSV path (default: data/raw/creditcard.csv)")
     p.add_argument("--target-fpr", type=float, default=TrainingDefaults.target_fpr)
-    # Logreg
+    # Logreg (Phase 2)
     p.add_argument("--C", type=float, default=TrainingDefaults.logreg_C)
     p.add_argument("--max-iter", type=int, default=TrainingDefaults.logreg_max_iter)
-    # LightGBM (comparison model)
+    # LightGBM (comparison)
     p.add_argument("--lgbm-n-estimators", type=int, default=TrainingDefaults.lgbm_n_estimators)
     p.add_argument("--lgbm-learning-rate", type=float, default=TrainingDefaults.lgbm_learning_rate)
     p.add_argument("--lgbm-num-leaves", type=int, default=TrainingDefaults.lgbm_num_leaves)
@@ -235,6 +297,16 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--lgbm-subsample", type=float, default=TrainingDefaults.lgbm_subsample)
     p.add_argument("--lgbm-colsample-bytree", type=float, default=TrainingDefaults.lgbm_colsample_bytree)
     p.add_argument("--lgbm-early-stopping-rounds", type=int, default=TrainingDefaults.lgbm_early_stopping_rounds)
+    # XGBoost (Phase 3 primary)
+    p.add_argument("--xgb-n-estimators", type=int, default=500)
+    p.add_argument("--xgb-learning-rate", type=float, default=0.05)
+    p.add_argument("--xgb-max-depth", type=int, default=6)
+    p.add_argument("--xgb-min-child-weight", type=int, default=1)
+    p.add_argument("--xgb-subsample", type=float, default=0.8)
+    p.add_argument("--xgb-colsample-bytree", type=float, default=0.8)
+    p.add_argument("--xgb-gamma", type=float, default=0.0)
+    p.add_argument("--xgb-reg-alpha", type=float, default=0.0)
+    p.add_argument("--xgb-reg-lambda", type=float, default=1.0)
     return p
 
 

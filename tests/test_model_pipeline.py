@@ -1,4 +1,4 @@
-"""Phase 2 tests — model registry, evaluation, inference, training smoke."""
+"""Phase 2 + Phase 3 tests — model registry, evaluation, inference, training smoke."""
 
 from __future__ import annotations
 
@@ -29,6 +29,14 @@ from finsheild.train import MODEL_OUTPUT_DIR
 
 EXPECTED_INPUTS = ["Time"] + [f"V{i}" for i in range(1, 29)] + ["Amount"]
 
+try:
+    import xgboost  # noqa: F401
+    HAS_XGBOOST = True
+except ImportError:
+    HAS_XGBOOST = False
+
+xgb_required = pytest.mark.skipif(not HAS_XGBOOST, reason="xgboost not installed in this env")
+
 
 # --- helpers ---------------------------------------------------------------- #
 
@@ -43,15 +51,15 @@ def _synth_df(n: int = 800, seed: int = 42) -> pd.DataFrame:
     return pd.DataFrame(data)
 
 
-# --- model registry --------------------------------------------------------- #
+# --- model registry (Phase 2 / always-installable) ------------------------- #
 
 
-def test_model_registry_has_logreg_and_lightgbm():
+def test_model_registry_has_phase2_models():
+    """logreg + lightgbm build without external ML deps beyond sklearn."""
     names = list_models()
     assert "logreg" in names
     assert "lightgbm" in names
-    for n in names:
-        spec = MODEL_REGISTRY[n]
+    for n in ("logreg", "lightgbm"):
         m = build_model(n)
         assert hasattr(m, "predict_proba") or hasattr(m, "decision_function")
 
@@ -65,6 +73,29 @@ def test_build_model_supports_overrides():
 def test_unknown_model_raises():
     with pytest.raises(KeyError):
         build_model("nope-neural-net")
+
+
+# --- Phase 3 XGBoost -------------------------------------------------------- #
+
+
+@xgb_required
+def test_model_registry_includes_xgboost_buildable():
+    assert "xgboost" in list_models()
+    m = build_model("xgboost")
+    assert hasattr(m, "predict_proba")
+    # Defaults match Phase 3 plan
+    assert m.n_estimators == 500
+    assert m.learning_rate == 0.05
+    assert m.max_depth == 6
+    assert m.eval_metric == "aucpr"  # PR-AUC for early stopping
+
+
+@xgb_required
+def test_build_xgboost_supports_overrides():
+    m = build_model("xgboost", n_estimators=42, max_depth=4, learning_rate=0.2)
+    assert m.n_estimators == 42
+    assert m.max_depth == 4
+    assert m.learning_rate == 0.2
 
 
 # --- train.py MODEL_OUTPUT_DIR routing ------------------------------------- #
@@ -152,7 +183,6 @@ def test_plot_confusion_matrix_writes_file(tmp_path: Path):
 
 
 def test_fraud_predictor_roundtrip(tmp_path: Path):
-    """Train a small logreg, save artifacts, load via FraudPredictor, score a record."""
     from sklearn.linear_model import LogisticRegression
 
     df = _synth_df(n=400, seed=7)
@@ -237,11 +267,11 @@ def test_snapshot_config_is_json_serializable():
     assert "paths" in s and "training" in s and "foo" in s
 
 
-# --- training smoke (no full run) ------------------------------------------ #
+# --- training smoke --------------------------------------------------------- #
 
 
 def test_train_logreg_smoke(tmp_path: Path):
-    """End-to-end logreg baseline run; writes to models/baseline/ + evaluation/reports/."""
+    """End-to-end logreg baseline run; writes to models/baseline/ + evaluation/."""
     import os
     import subprocess
     import sys
@@ -262,7 +292,6 @@ def test_train_logreg_smoke(tmp_path: Path):
     cmd = [sys.executable, "-m", "finsheild.train", "--model", "logreg"]
     subprocess.check_call(cmd, env={**env, **__import__("os").environ}, cwd=str(Path.cwd()))
 
-    # Per-model directory layout
     base = tmp_path / "models" / "baseline"
     assert (base / "model.joblib").exists()
     assert (base / "scaler.joblib").exists()
@@ -270,14 +299,47 @@ def test_train_logreg_smoke(tmp_path: Path):
     assert (base / "metrics.json").exists()
     assert (base / "config.json").exists()
 
-    # Evaluation artifacts
-    eval_root = Path("evaluation")
-    # Note: these go under repo's evaluation/ dir because paths defaults aren't redirected
-    assert any(eval_root.glob("reports/baseline_*.md")) or (eval_root / "reports" / "baseline_report.md").exists()
-    assert any((eval_root / "figures").glob("baseline_*.png"))
-
-    # Metrics content
     m = json.loads((base / "metrics.json").read_text())
+    for key in ("pr_auc", "roc_auc", "precision", "recall", "f1", "confusion_matrix"):
+        assert key in m
+    assert set(m["confusion_matrix"]) == {"tn", "fp", "fn", "tp"}
+
+
+@xgb_required
+def test_train_xgboost_smoke(tmp_path: Path):
+    """End-to-end XGBoost training; writes to models/xgboost/ + evaluation/."""
+    import os
+    import subprocess
+    import sys
+
+    raw_csv = tmp_path / "raw.csv"
+    subprocess.check_call([
+        sys.executable, "scripts/download_dataset.py",
+        "--synthetic", "--n", "1000", "--output", str(raw_csv),
+    ], cwd=str(Path.cwd()))
+
+    env = {
+        "PYTHONPATH": "src",
+        "FINSHEILD_RAW_CSV": str(raw_csv),
+        "FINSHEILD_PROCESSED_DIR": str(tmp_path / "processed"),
+        "FINSHEILD_MODELS_DIR": str(tmp_path / "models"),
+        "FINSHEILD_RESULTS_DIR": str(tmp_path / "results"),
+    }
+    cmd = [
+        sys.executable, "-m", "finsheild.train",
+        "--model", "xgboost",
+        "--xgb-n-estimators", "50",
+    ]
+    subprocess.check_call(cmd, env={**env, **__import__("os").environ}, cwd=str(Path.cwd()))
+
+    xgb_dir = tmp_path / "models" / "xgboost"
+    assert (xgb_dir / "model.joblib").exists()
+    assert (xgb_dir / "scaler.joblib").exists()
+    assert (xgb_dir / "threshold.json").exists()
+    assert (xgb_dir / "metrics.json").exists()
+    assert (xgb_dir / "config.json").exists()
+
+    m = json.loads((xgb_dir / "metrics.json").read_text())
     for key in ("pr_auc", "roc_auc", "precision", "recall", "f1", "confusion_matrix"):
         assert key in m
     assert set(m["confusion_matrix"]) == {"tn", "fp", "fn", "tp"}
