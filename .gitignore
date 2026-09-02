@@ -1,0 +1,8 @@
+data/raw/
+data/processed/
+evaluation/figures/
+*.csv
+*.parquet
+__pycache__/
+.venv/
+.ipynb_checkpoints/
