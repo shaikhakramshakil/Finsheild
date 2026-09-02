@@ -1,6 +1,9 @@
 data/raw/
 data/processed/
 evaluation/figures/
+models/
+checkpoints/
+results/
 *.csv
 *.parquet
 *.joblib
@@ -11,9 +14,14 @@ __pycache__/
 *.egg-info/
 dist/
 build/
+# Colab / Drive
+/content/
 # Keep tracking
 !data/README.md
 !evaluation/reports/.gitkeep
 !evaluation/figures/.gitkeep
 !data/raw/.gitkeep
 !data/processed/.gitkeep
+!models/README.md
+!checkpoints/README.md
+!results/README.md
