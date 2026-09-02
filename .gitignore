@@ -1,5 +1,7 @@
 data/raw/
 data/processed/
+data/synthetic_env/
+data/processed/
 evaluation/figures/
 models/
 checkpoints/
@@ -16,6 +18,9 @@ dist/
 build/
 # Colab / Drive
 /content/
+# Temporary Colab probe scripts (one-off CLI tests)
+/_colab_*.py
+/_infra_*.py
 # Keep tracking
 !data/README.md
 !evaluation/reports/.gitkeep

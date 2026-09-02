@@ -7,6 +7,8 @@ This file is the project's committed home for project-intrinsic agent knowledge:
 - Dataset: Primary Kaggle Credit Card Fraud (ULB) — see `docs/dataset.md` and `config/dataset.yaml`; raw under `data/raw/` (gitignored).
 - Notebooks: `notebooks/02_eda.ipynb` (local), `notebooks/colab/01_dataset.ipynb` (Colab-ready — hardware detection, pip install, kagglehub/opendatasets download).
 - Evaluation: `evaluation/reports/dataset_report.md` + `evaluation/metrics.json` (real run), figures under `evaluation/figures/` (gitignored).
+- Synthetic environment (Phase 4): `src/finsheild/synthetic_env/` — six tables (users, accounts, devices, merchants, locations, transactions) plus `account_devices` link. Eight inspectable scenarios; deterministic via `SyntheticEnvConfig(seed=…)`. Schema in `docs/synthetic_env_schema.md`. Generate with `PYTHONPATH=src python scripts/generate_synthetic_env.py --scale dev --out data/synthetic_env/dev`.
+- Colab CLI: `colab` (v0.6.0) at `~/.local/bin/colab`. CPU sessions work out of the box; GPU sessions need `--gpu T4|L4|G4|H100|A100` (`colab new -s <name> --gpu T4`). Existing session name is `finsheild` (CPU); new ephemeral names auto-clean via `--session`. PyTorch in Colab comes as `2.11.0+cu128` and reports CUDA True on T4.
 
 ## Maintaining this file
 
