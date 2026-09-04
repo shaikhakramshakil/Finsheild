@@ -63,18 +63,30 @@ def _build_background(
 
     acc_dev_map = account_devices.groupby("account_id")["device_id"].apply(
         lambda s: s.to_numpy()).to_dict()
+    all_dev_ids = devices["device_id"].to_numpy()
     dev_choices = np.empty(n, dtype=np.int64)
     for i, acc_id in enumerate(acc_choices):
+        # 10% of legit transactions use a new device (overlap with fraud)
+        if rng.random() < 0.10:
+            known = set(acc_dev_map.get(int(acc_id), []))
+            candidates = [d for d in all_dev_ids if d not in known]
+            if candidates:
+                dev_choices[i] = int(rng.choice(candidates))
+                continue
         devs = acc_dev_map.get(int(acc_id))
         if devs is None or len(devs) == 0:
             dev_choices[i] = int(rng.integers(1, len(devices) + 1))
         else:
             dev_choices[i] = int(rng.choice(devs))
 
-    # Legit merchants occasionally visit high-risk too (overlap)
-    merchant_probs = np.full(len(merchants), 0.7)
-    mask = merchants["risk_band"].to_numpy() == "high"
-    merchant_probs[mask] = 0.3
+    # Legit merchants: 20% high-risk to overlap with fraud (fraud has ~30% high-risk)
+    # Weight high-risk higher so that ~20% of sampled merchants are high-risk
+    n_high = int((merchants["risk_band"] == "high").sum())
+    n_low = len(merchants) - n_high
+    # Want P(high) = 0.20
+    w_high = 0.20 / max(n_high, 1)
+    w_low = 0.80 / max(n_low, 1)
+    merchant_probs = np.where(merchants["risk_band"].to_numpy() == "high", w_high, w_low)
     merchant_probs = merchant_probs / merchant_probs.sum()
     merchant_choices = rng.choice(merchants["merchant_id"].to_numpy(),
                                    size=n, replace=True, p=merchant_probs)

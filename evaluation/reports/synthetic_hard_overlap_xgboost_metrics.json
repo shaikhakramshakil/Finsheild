@@ -1,0 +1,29 @@
+{
+  "model": "xgboost",
+  "roc_auc": 0.9505185185185185,
+  "pr_auc": 0.3727600627469143,
+  "precision": 0.5,
+  "recall": 0.2,
+  "f1": 0.2857142857142857,
+  "recall_at_fpr_1pct": 0.4,
+  "threshold_at_1pct": 0.06939719617366791,
+  "threshold": 0.5,
+  "confusion": {
+    "tn": 1347,
+    "fp": 3,
+    "fn": 12,
+    "tp": 3
+  },
+  "support": {
+    "pos": 15,
+    "neg": 1350
+  },
+  "fraud_rate": 0.01098901098901099,
+  "lift_vs_random": 33.9211657099692,
+  "train_seconds": 9.495726823806763,
+  "threshold_1pct": 0.06939719617366791,
+  "data": "synthetic_hard_overlap (rows=9100, fraud=100, rate=1.0989%)",
+  "seed": 1729,
+  "n_per_scenario": 20,
+  "n_transactions_bg": 9000
+}

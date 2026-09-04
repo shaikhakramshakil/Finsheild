@@ -38,25 +38,16 @@ def test_validate_schema_raises_on_missing_column(df):
 
 
 def test_splits_disjoint(df):
-    train, val, test = make_splits(df, test_size=0.15, val_size=0.15, random_state=42)
-    # sizes
+    # Check disjoint by construction using a unique row id (handles duplicate values in real ULB)
+    df_with_id = df.copy()
+    df_with_id["_row_id"] = range(len(df_with_id))
+    train, val, test = make_splits(df_with_id, test_size=0.15, val_size=0.15, random_state=42)
     assert len(train) + len(val) + len(test) == len(df)
-    # check disjoint by index overlap after reset they are disjoint by construction, check no duplicate rows by id
-    # Use hash of rows to ensure disjoint (since reset_index, check that intersection is empty via merge on all columns)
-    # Simpler: ensure no overlapping indices if we had kept original index; here check that concatenated length equals union
-    combined = pd.concat([train, val, test])
-    # If splits are disjoint, no duplicated rows across splits beyond duplicates within df (which are 0)
-    # Check that train/val/test have no identical rows overlapping: use set of tuple hashes
-    # For 10k dataset with no duplicates, disjoint means combined duplicated count equals df duplicated
-    assert len(combined) == len(df)
-    # Also ensure no index overlap beyond reset: check that no row appears in two splits (use hash)
-    # Quick: check that intersection via inner merge on all columns is empty
-    merged = pd.merge(train, val, how="inner", on=list(df.columns))
-    assert len(merged) == 0, "Train and val overlap"
-    merged2 = pd.merge(train, test, how="inner", on=list(df.columns))
-    assert len(merged2) == 0, "Train and test overlap"
-    merged3 = pd.merge(val, test, how="inner", on=list(df.columns))
-    assert len(merged3) == 0, "Val and test overlap"
+    assert len(set(train["_row_id"]) & set(val["_row_id"])) == 0, "Train and val overlap"
+    assert len(set(train["_row_id"]) & set(test["_row_id"])) == 0, "Train and test overlap"
+    assert len(set(val["_row_id"]) & set(test["_row_id"])) == 0, "Val and test overlap"
+    # Also ensure no duplicated ids across splits
+    assert len(train["_row_id"]) + len(val["_row_id"]) + len(test["_row_id"]) == len(df)
 
 
 def test_stratification_preserved(df):
