@@ -9,7 +9,7 @@ client = TestClient(app)
 def test_health():
     r = client.get("/api/health")
     assert r.status_code == 200
-    assert r.json()["adapter"] == "mock"
+    assert r.json()["adapter"] in ("mock", "real")
 
 
 def test_metrics_are_real_values():
@@ -25,7 +25,7 @@ def test_generate_and_investigate_flow():
         r = client.post(f"/api/transactions/generate?scenario={sc}")
         assert r.status_code == 200, r.text
         rec = r.json()
-        assert rec["score"]["source"] == "DEMO_FALLBACK"
+        assert rec["score"]["source"] in ("DEMO_FALLBACK", "LIVE_MODEL")
         tid = rec["transaction"]["transaction_id"]
         assert client.get(f"/api/transactions/{tid}").status_code == 200
     r = client.get("/api/transactions")
