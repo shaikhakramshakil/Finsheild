@@ -6,7 +6,44 @@ evaluates, does separability analysis, and saves reports.
 Intended to be run via: colab run scripts/run_hard_overlap_experiment.py
 or python scripts/run_hard_overlap_experiment.py locally for smoke.
 """
-import json, pathlib, sys
+import json, pathlib, sys, os, subprocess, pathlib as _pl
+# Colab bootstrap: if finsheild not importable, fetch repo via tarball
+try:
+    import finsheild  # noqa
+except ImportError:
+    print("finsheild not found — bootstrapping repo via tarball...", file=sys.stderr)
+    # Try fetch_repo.py if present, else direct tarball
+    fetch = _pl.Path("scripts/fetch_repo.py")
+    if fetch.exists():
+        subprocess.check_call([sys.executable, str(fetch), "--branch", "main", "--dest", "/content/Finsheild"])
+        sys.path.insert(0, "/content/Finsheild/src")
+        os.chdir("/content/Finsheild")
+    else:
+        # Direct tarball fallback
+        import urllib.request, tarfile, tempfile
+        url = "https://github.com/shaikhakramshakil/Finsheild/archive/refs/heads/main.tar.gz"
+        print(f"Downloading {url}", file=sys.stderr)
+        data = urllib.request.urlopen(url, timeout=120).read()
+        with tempfile.NamedTemporaryFile(suffix=".tar.gz", delete=False) as f:
+            f.write(data); tmp=f.name
+        os.makedirs("/content/Finsheild", exist_ok=True)
+        with tarfile.open(tmp, "r:gz") as tf:
+            tf.extractall("/content/Finsheild", filter="data")
+        # Flatten top-level dir
+        import shutil
+        top = [p for p in _pl.Path("/content/Finsheild").iterdir() if p.is_dir()]
+        if len(top)==1:
+            inner=top[0]
+            for entry in inner.iterdir():
+                shutil.move(str(entry), str(_pl.Path("/content/Finsheild")/entry.name))
+            inner.rmdir()
+        import os as _os
+        _os.unlink(tmp)
+        sys.path.insert(0, "/content/Finsheild/src")
+        os.chdir("/content/Finsheild")
+        # Install deps
+        subprocess.check_call([sys.executable, "-m", "pip", "install", "-q", "-r", "requirements-colab.txt"])
+
 import numpy as np
 import pandas as pd
 
