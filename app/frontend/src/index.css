@@ -1,0 +1,9 @@
+@import "tailwindcss";
+
+:root { color-scheme: dark; }
+body { background: #0a0e14; color: #e6edf3; font-family: ui-sans-serif, system-ui, sans-serif; }
+.card { background: #11161f; border: 1px solid #1f2733; border-radius: 10px; }
+.risk-LOW { color: #3fb950; } .risk-MEDIUM { color: #d29922; }
+.risk-HIGH { color: #f85149; } .risk-CRITICAL { color: #ff2e63; background: rgba(255,46,99,.08); }
+.src-LIVE_MODEL { color: #3fb950; } .src-DEMO_FALLBACK { color: #d29922; }
+.mono { font-family: ui-monospace, monospace; }
